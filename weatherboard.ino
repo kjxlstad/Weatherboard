@@ -1,92 +1,205 @@
+// WiFi and json parsing
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Arduino.h>
-#include <ESP8266WiFi.h>
-#include <ESP8266WiFiMulti.h>
-#include <ESP8266HTTPClient.h>
-#include <WiFiClient.h>
 
+// Display drivers
 #define ENABLE_GxEPD2_GFX 0
 #include <GxEPD2_3C.h>
 #include <Fonts/FreeMonoBold24pt7b.h>
-
+#include <Fonts/FreeSansBold18pt7b.h>
+#include <Fonts/FreeSans9pt7b.h>
 
 GxEPD2_3C<GxEPD2_750c, GxEPD2_750c::HEIGHT / 4> display(GxEPD2_750c(/*CS=D8*/ 15, /*DC=D3*/ 4, /*RST=D4*/ 2, /*BUSY=D2*/ 5));
 
-ESP8266WiFiMulti WiFiMulti;
-DynamicJsonDocument doc(521);
+// Globals
+//DynamicJsonDocument weatherDoc(521);
+//DynamicJsonDocument forecastDoc(17375);
 
-WiFiClient client;
-HTTPClient http;
+struct Event {
+  const char* title;
+  const char* description;
+  const char* timeInterval;
+};
+
+struct Data {
+  const char* currentWeather;
+  const char* weatherDescription;
+  const char* icon;
+  const char* city;
+  float temperature;
+  int windVelocity;
+  int windDirection;
+  Event events[4];
+};
+
+struct WeatherInstance {
+  const char* main;
+  const char* description;
+  const char* icon;
+  float temperature;
+  float rain;
+  const char* date;
+};
+
+Data data;
+WeatherInstance forecast[9];
+
+
 void setup() {
   Serial.begin(115200);
-  // Serial.setDebugOutput(true);
-  Serial.println();
+  WiFi.begin("4G-Gateway", "21078256");
 
-  WiFi.mode(WIFI_STA);
-  WiFiMulti.addAP("4G-Gateway", "21078256");
-
+  // Wait for wifi connection
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting...");
+  }
+  
   display.init(115200);
-  display.setFont(&FreeMonoBold24pt7b);
-  display.setTextColor(GxEPD_BLACK);
-  int16_t tbx, tby; uint16_t tbw, tbh;
-  display.getTextBounds("Hello World", 0, 0, &tbx, &tby, &tbw, &tbh);
-  uint16_t x = ((display.width() - tbw) / 2) - tbx;
-  uint16_t y = ((display.height() - tbh) / 2) - tby;
+
+  updateData(getWeather("weather"));
+  updateForecast(getWeather("forecast"));
+  draw();
+}
+
+void loop() {}
+
+
+void draw() {
+  // Init screen
+  display.setRotation(0);
   display.setFullWindow();
   display.firstPage();
 
-}
-
-String getWeather() {
-  if ((WiFiMulti.run() == WL_CONNECTED)) {
-    if (http.begin(client, "http://api.openweathermap.org/data/2.5/weather?q=Oslo,Norway&appid=61616020863f09e0a462ea300d512a56")) {
-      int httpCode = http.GET();
-      if (httpCode > 0) {
-        if (httpCode = HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-          return http.getString();
-        }
-      } 
-      http.end();
-    }
-  }
-}
-
-void draw(String weather, String desc, double temp, double windSpeed, double windDir) {
+  // Do drawing
   do {
+    // Clear screen
     display.fillScreen(GxEPD_WHITE);
-    display.setCursor(0, 50);
-    display.print(weather);
-    display.setCursor(0, 100);
-    display.print(desc);  
-    display.setCursor(0, 150);
-    display.print(temp);
-    display.setCursor(0, 200);
-    display.print(windSpeed);
-    display.setCursor(0, 250);
-    display.print(windDir);
-  }
 
+    
+    // General UI
+    display.fillRect(384, 0, 256, 384, GxEPD_BLACK);
+    display.setCursor(0, 0);
+    display.setTextColor(GxEPD_BLACK);
+    display.setFont(&FreeMonoBold24pt7b);
+
+    // Graph
+    uint16_t verticalPadding = 72;
+    uint16_t horizontalPadding = 44;
+    uint16_t graphHeight = display.height() - 2 * verticalPadding;
+    uint16_t graphWidth = display.width() - 256 - 2 * horizontalPadding;
+    int hGuidelines = 4;
+    int vGuidelines = 9;
+    
+    for (int i = 0; i < 4; i++) {
+      uint16_t y = verticalPadding + i * graphHeight / (hGuidelines - 1);
+      display.drawFastHLine(horizontalPadding, y, graphWidth, GxEPD_BLACK);
+    }
+    for (int i = 0; i <= 8; i++) {
+      uint16_t x = horizontalPadding + i * graphWidth / (vGuidelines - 1);
+      display.drawFastVLine(x, graphHeight + verticalPadding, 10, GxEPD_BLACK);
+    }
+
+    uint16_t oldX = horizontalPadding;
+    uint16_t oldY = verticalPadding + map(forecast[0].temperature, -5, 10, graphHeight, 0);
+    for (int i = 0; i <= 8; i++) {
+      uint16_t x = horizontalPadding + i * graphWidth / (vGuidelines - 1);
+      uint16_t y = verticalPadding + map(forecast[i].temperature, -5, 10, graphHeight, 0);
+      display.drawLine(oldX, oldY, x, y, GxEPD_BLACK);
+      display.fillRoundRect(x - 2, y - 2, 5, 5, 3, GxEPD_RED);
+      oldX = x;
+      oldY = y;
+    }
+
+    /*
+    display.setCursor(10, 100);
+    display.println(data.currentWeather);
+    display.println(data.weatherDescription);
+    display.println(data.city);
+    display.println(data.temperature);
+    display.println(data.windVelocity);
+    display.println(data.windDirection);
+    
+    // Events
+    int eventCount = 4;
+    int eventPadding = 16;
+    int eventHeight = (display.height() - (eventPadding * (eventCount + 1))) / eventCount;
+    
+    for (int i = 0; i < 4; i++) {
+      if (i == 0) { display.drawRect(display.height() + eventPadding - 2, eventPadding + i * (eventHeight + eventPadding) - 2, display.width() - display.height() - 2 * eventPadding + 4, eventHeight + 4, GxEPD_RED); }
+      display.fillRect(display.height() + eventPadding, eventPadding + i * (eventHeight + eventPadding), 256 - 2 * eventPadding, eventHeight, GxEPD_WHITE);
+      display.setFont(&FreeSansBold18pt7b);
+      display.setCursor(display.height() + eventPadding + 8, eventPadding + i * (eventHeight + eventPadding) + 30);
+      display.println(data.events[i].title);
+      display.setFont(&FreeSans9pt7b);
+      display.setCursor(display.height() + eventPadding + 10, eventPadding + i * (eventHeight + eventPadding) + 50);
+      display.println(data.events[i].description);
+      display.setCursor(display.height() + eventPadding + 10, eventPadding + i * (eventHeight + eventPadding) + 70);
+      display.println(data.events[i].timeInterval);
+    }
+    */
+  }
   while (display.nextPage());
 }
 
-void updateWeather() {
-  String payload = getWeather();
-  deserializeJson(doc, payload);
-  JsonObject obj = doc.as<JsonObject>();
 
-  String weather = obj["weather"][0]["main"]; // Weather one word
-  String desc = obj["weather"][0]["description"]; // Description
-  double temp = ((double) obj["main"]["temp"]) - 273.15; // Temperature
-  double windSpeed = obj["wind"]["speed"];
-  double windDir = obj["wind"]["deg"];
-
-  draw(weather, desc, temp, windSpeed, windDir);
+String getWeather(String type) {
+  String key = "&appid=61616020863f09e0a462ea300d512a56";
+  String host = "http://api.openweathermap.org/data/2.5/";
+  String location = "?q=oslo,norway";
+  String count = "&cnt=9";
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(host + type + location + key + count);
+    int httpCode = http.GET();
+    if (httpCode > 0) {
+      return http.getString();
+    }
+    http.end();
+  }
 }
 
-void loop() {
-  updateWeather();
 
-  delay(10000);
+void updateForecast(String payload) {
+  JsonArray list = parseJson(payload)["list"];
+  
+  for (int i = 0; i < 9; i++) {
+    forecast[i].temperature = ((double) list[i]["main"]["temp"]) - 273.15;
+    forecast[i].main = list[i]["weather"][0]["main"];
+    forecast[i].description = list[i]["weather"][0]["description"];
+    forecast[i].icon = list[i]["weather"][0]["icon"];
+    forecast[i].rain = list[i]["rain"]["3h"];
+    forecast[i].date = list[i]["dt_txt"];
+  } 
+}
+
+
+void updateData(String payload) {
+  JsonObject root = parseJson(payload);
+
+  data.currentWeather = root["weather"][0]["main"];
+  data.weatherDescription = root["weather"][0]["description"];
+  data.icon = root["weather"][0]["icon"];
+  data.city = root["name"];
+  data.temperature = ((double) root["main"]["temp"]) - 273.15;
+  data.windVelocity = root["wind"]["speed"];
+  data.windDirection = root["wind"]["deg"];
+
+  // Mock
+  data.events[0] = {"DATA2500", "Undervisning", "08:30 - 10.15"};
+  data.events[1] = {"DATA3705", "Undervisning", "10:30 - 12.15"};
+  data.events[2] = {"DAPA2101", "Lab", "12:30 - 14.15"};
+  data.events[3] = {"DATA2410", "Lab", "14:30 - 16.15"};
+}
+
+JsonObject parseJson(String payload) {
+  const size_t bufferSize = 9*JSON_ARRAY_SIZE(1) + JSON_ARRAY_SIZE(9) + 24*JSON_OBJECT_SIZE(1) + 10*JSON_OBJECT_SIZE(2) + 9*JSON_OBJECT_SIZE(4) + JSON_OBJECT_SIZE(5) + 3*JSON_OBJECT_SIZE(7) + 7*JSON_OBJECT_SIZE(8) + 9*JSON_OBJECT_SIZE(9);
+  DynamicJsonDocument jsonBuffer(bufferSize);
+  deserializeJson(jsonBuffer, payload);
+  return jsonBuffer.as<JsonObject>();
 }
 
 
