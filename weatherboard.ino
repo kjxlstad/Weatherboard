@@ -83,7 +83,7 @@ void draw() {
     display.fillRect(384, 0, 256, 384, GxEPD_BLACK);
     display.setCursor(0, 0);
     display.setTextColor(GxEPD_BLACK);
-    display.setFont(&FreeMonoBold24pt7b);
+    display.setFont(&FreeSans9pt7b);
 
     // Graph
     uint16_t verticalPadding = 72;
@@ -96,17 +96,22 @@ void draw() {
     for (int i = 0; i < 4; i++) {
       uint16_t y = verticalPadding + i * graphHeight / (hGuidelines - 1);
       display.drawFastHLine(horizontalPadding, y, graphWidth, GxEPD_BLACK);
+      display.setCursor(10, y + 5);
+      display.println(minTemp() - 85 - i * 5);
     }
+    
     for (int i = 0; i <= 8; i++) {
       uint16_t x = horizontalPadding + i * graphWidth / (vGuidelines - 1);
       display.drawFastVLine(x, graphHeight + verticalPadding, 10, GxEPD_BLACK);
+      display.setCursor(x, graphHeight + verticalPadding);
+      display.println(((String) forecast[i].date).substring(11, 15));
     }
 
     uint16_t oldX = horizontalPadding;
     uint16_t oldY = verticalPadding + map(forecast[0].temperature, -5, 10, graphHeight, 0);
     for (int i = 0; i <= 8; i++) {
       uint16_t x = horizontalPadding + i * graphWidth / (vGuidelines - 1);
-      uint16_t y = verticalPadding + map(forecast[i].temperature, -5, 10, graphHeight, 0);
+      uint16_t y = verticalPadding + map(forecast[i].temperature, -5.0, 10.0, graphHeight, 0.0);
       display.drawLine(oldX, oldY, x, y, GxEPD_BLACK);
       display.fillRoundRect(x - 2, y - 2, 5, 5, 3, GxEPD_RED);
       oldX = x;
@@ -167,7 +172,7 @@ void updateForecast(String payload) {
   JsonArray list = parseJson(payload)["list"];
   
   for (int i = 0; i < 9; i++) {
-    forecast[i].temperature = ((double) list[i]["main"]["temp"]) - 273.15;
+    forecast[i].temperature = ((float) list[i]["main"]["temp"]) - 273.15;
     forecast[i].main = list[i]["weather"][0]["main"];
     forecast[i].description = list[i]["weather"][0]["description"];
     forecast[i].icon = list[i]["weather"][0]["icon"];
@@ -184,7 +189,7 @@ void updateData(String payload) {
   data.weatherDescription = root["weather"][0]["description"];
   data.icon = root["weather"][0]["icon"];
   data.city = root["name"];
-  data.temperature = ((double) root["main"]["temp"]) - 273.15;
+  data.temperature = ((float) root["main"]["temp"]) - 273.15;
   data.windVelocity = root["wind"]["speed"];
   data.windDirection = root["wind"]["deg"];
 
@@ -196,10 +201,25 @@ void updateData(String payload) {
 }
 
 JsonObject parseJson(String payload) {
-  const size_t bufferSize = 9*JSON_ARRAY_SIZE(1) + JSON_ARRAY_SIZE(9) + 24*JSON_OBJECT_SIZE(1) + 10*JSON_OBJECT_SIZE(2) + 9*JSON_OBJECT_SIZE(4) + JSON_OBJECT_SIZE(5) + 3*JSON_OBJECT_SIZE(7) + 7*JSON_OBJECT_SIZE(8) + 9*JSON_OBJECT_SIZE(9);
-  DynamicJsonDocument jsonBuffer(bufferSize);
+  DynamicJsonDocument jsonBuffer(6164);
   deserializeJson(jsonBuffer, payload);
   return jsonBuffer.as<JsonObject>();
+}
+
+int minTemp() {
+  int minTemp = 100;
+  for (int i = 0; 9 <= 8; i++) {
+    float t = forecast[i].temperature;
+    if (t < minTemp) {
+      minTemp = t;
+    }
+  }
+  return round5(minTemp);
+}
+
+int round5 (int a)
+{
+  return a >= 0 ? (a+2)/5*5 : (a-2)/5*5;
 }
 
 
